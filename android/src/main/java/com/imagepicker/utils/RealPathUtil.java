@@ -1,18 +1,18 @@
 package com.imagepicker.utils;
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
+import android.content.ContentUris;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
-import android.content.ContentUris;
-import android.os.Environment;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.content.FileProvider;
+import android.util.Log;
 
 import java.io.File;
 
@@ -96,8 +96,11 @@ public class RealPathUtil {
 			if (isGooglePhotosUri(uri))
 				return uri.getLastPathSegment();
 
-			if (isFileProviderUri(context, uri))
-				return getFileProviderPath(context, uri);
+			if (isFileProviderUri(context, uri)){
+				Log.e("sss","1............");
+				String s = getFileProviderPath(context, uri);
+				return s;
+			}
 
 			return getDataColumn(context, uri, null, null);
 		}
@@ -105,7 +108,7 @@ public class RealPathUtil {
 		else if ("file".equalsIgnoreCase(uri.getScheme())) {
 			return uri.getPath();
 		}
-
+		Log.e("sss","2............");
 		return null;
 	}
 
@@ -197,6 +200,7 @@ public class RealPathUtil {
 	{
 		final File appDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES);
 		final File file = new File(appDir, uri.getLastPathSegment());
+		Log.e("sss",file.exists() ? "存在" : "不存在");
 		return file.exists() ? file.toString(): null;
 	}
 }

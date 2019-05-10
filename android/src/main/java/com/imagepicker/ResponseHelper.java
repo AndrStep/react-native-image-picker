@@ -36,6 +36,10 @@ public class ResponseHelper
         response.putInt(key, value);
     }
 
+    public Integer getInt(@NonNull final String key){
+        return response.getInt(key);
+    }
+
     public void putBoolean(@NonNull final String key,
                            final boolean value)
     {

@@ -6,8 +6,11 @@ import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.MediaStore;
@@ -21,7 +24,6 @@ import android.text.TextUtils;
 import android.util.Base64;
 import android.util.Patterns;
 import android.webkit.MimeTypeMap;
-import android.content.pm.PackageManager;
 
 import com.facebook.react.ReactActivity;
 import com.facebook.react.bridge.ActivityEventListener;
@@ -29,12 +31,16 @@ import com.facebook.react.bridge.Callback;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
+import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.modules.core.PermissionAwareActivity;
+import com.facebook.react.modules.core.PermissionListener;
 import com.imagepicker.media.ImageConfig;
-import com.imagepicker.permissions.PermissionUtils;
 import com.imagepicker.permissions.OnImagePickerPermissionsCallback;
+import com.imagepicker.permissions.PermissionUtils;
 import com.imagepicker.utils.MediaUtils.ReadExifResult;
 import com.imagepicker.utils.RealPathUtil;
+import com.imagepicker.utils.TextWaterMask;
 import com.imagepicker.utils.UI;
 
 import java.io.ByteArrayOutputStream;
@@ -47,13 +53,15 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.util.List;
+import java.util.UUID;
 
-import com.facebook.react.modules.core.PermissionListener;
-import com.facebook.react.modules.core.PermissionAwareActivity;
-
-import static com.imagepicker.utils.MediaUtils.*;
+import static com.imagepicker.utils.MediaUtils.RolloutPhotoResult;
 import static com.imagepicker.utils.MediaUtils.createNewFile;
+import static com.imagepicker.utils.MediaUtils.fileScan;
 import static com.imagepicker.utils.MediaUtils.getResizedImage;
+import static com.imagepicker.utils.MediaUtils.readExifInterface;
+import static com.imagepicker.utils.MediaUtils.removeUselessFiles;
+import static com.imagepicker.utils.MediaUtils.rolloutPhotoFromCamera;
 
 public class ImagePickerModule extends ReactContextBaseJavaModule
         implements ActivityEventListener
@@ -380,8 +388,11 @@ public class ImagePickerModule extends ReactContextBaseJavaModule
     {
       case REQUEST_LAUNCH_IMAGE_CAPTURE:
         uri = cameraCaptureURI;
-        break;
 
+        //打水印，并替换保存图片
+        drawTextWaterMaskAndReplace(imageConfig.original.getAbsolutePath(),
+                imageConfig.original.getAbsolutePath(),REQUEST_LAUNCH_IMAGE_CAPTURE);
+        break;
       case REQUEST_LAUNCH_IMAGE_LIBRARY:
         uri = data.getData();
         String realPath = getRealPathFromURI(uri);
@@ -405,7 +416,15 @@ public class ImagePickerModule extends ReactContextBaseJavaModule
             return;
           }
         }
-        imageConfig = imageConfig.withOriginalFile(new File(realPath));
+        String new_filename = new StringBuilder("image-")
+                .append(UUID.randomUUID().toString())
+                .append(".jpg")
+                .toString();
+        //给图片打水印，并保存水印图片
+        String new_path = realPath.substring(0,realPath.lastIndexOf("/")+1) + new_filename;
+        drawTextWaterMaskAndReplace(realPath, new_path, REQUEST_LAUNCH_IMAGE_LIBRARY);
+
+        imageConfig = imageConfig.withOriginalFile(new File(new_path));
         break;
 
       case REQUEST_LAUNCH_VIDEO_LIBRARY:
@@ -438,6 +457,7 @@ public class ImagePickerModule extends ReactContextBaseJavaModule
     BitmapFactory.Options options = new BitmapFactory.Options();
     options.inJustDecodeBounds = true;
     BitmapFactory.decodeFile(imageConfig.original.getAbsolutePath(), options);
+
     int initialWidth = options.outWidth;
     int initialHeight = options.outHeight;
     updatedResultResponse(uri, imageConfig.original.getAbsolutePath());
@@ -667,7 +687,72 @@ public class ImagePickerModule extends ReactContextBaseJavaModule
     return file;
   }
 
+  private void drawTextWaterMaskAndReplace(@NonNull String path, @NonNull String new_path, @NonNull int request_type) {
+
+    InputStream inputStream = null;
+    try {
+      inputStream = new FileInputStream(new File(path));
+    } catch (FileNotFoundException e) {
+      e.printStackTrace();
+    }
+
+    byte[] bytes;
+    byte[] buffer = new byte[8192];
+    int bytesRead;
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    try {
+      while ((bytesRead = inputStream.read(buffer)) != -1) {
+        output.write(buffer, 0, bytesRead);
+      }
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+    bytes = output.toByteArray();
+
+    Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+
+
+    ReadableArray text_array = options.getArray("centent");
+
+//    String[] array = null;
+//
+//    array = new String[]{"水印测试",
+//            "经纬度：112.34567,36.789",
+//            "地址：北苑路北地铁站",
+//            "公司：北京神州泰岳软件股份有限公司",
+//            "时间:2019-05-09"};
+
+
+    Bitmap new_image = TextWaterMask.drawTextToLeftTop(reactContext, bitmap,
+            text_array, 40, Color.RED, 80, 80);
+    FileOutputStream b = null;
+    if (new_image != null){
+      try {
+        if (request_type == REQUEST_LAUNCH_IMAGE_CAPTURE){
+          //直接从照相机拍照，删除原图片
+          File old_file = new File(path);
+          old_file.delete();
+        }
+
+        b = new FileOutputStream(new_path);
+        new_image.compress(Bitmap.CompressFormat.JPEG, 100, b);// 把图片数据写入指定的文件
+      } catch (FileNotFoundException e) {
+        e.printStackTrace();
+      } finally {
+        try {
+          if (b != null) {
+            b.flush();   //刷新输出流
+            b.close();   //关闭输出流
+          }
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+      }
+    }
+  }
+
   private String getBase64StringFromFile(String absoluteFilePath) {
+
     InputStream inputStream = null;
     try {
       inputStream = new FileInputStream(new File(absoluteFilePath));
@@ -687,6 +772,26 @@ public class ImagePickerModule extends ReactContextBaseJavaModule
       e.printStackTrace();
     }
     bytes = output.toByteArray();
+
+//    Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+//
+//    Integer originalRotation = responseHelper.getInt("originalRotation");
+//    Log.e("sss","originalRotation : "+originalRotation);
+//
+//    //旋转图片 动作
+//    Matrix matrix = new Matrix();
+//    matrix.postRotate(originalRotation);
+//    // 创建新的图片
+//    Bitmap rotation_bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+//
+//
+//    Bitmap new_image = TextWaterMask.drawTextToLeftTop(reactContext, rotation_bitmap,
+//            "水印测试", 40, Color.RED, 80, 80);
+//
+//    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+//    new_image.compress(Bitmap.CompressFormat.JPEG, 100, baos);
+//    byte[] datas = baos.toByteArray();
+
     return Base64.encodeToString(bytes, Base64.NO_WRAP);
   }
 
